@@ -195,6 +195,31 @@ app.get('/api/venues/:id', async (req, res) => {
   }
 });
 
+// Debug endpoint - Check database state
+app.get('/debug/venues', async (req, res) => {
+  try {
+    // Ensure database is initialized
+    if (!pool) {
+      await initializeDatabase();
+    }
+
+    const totalCount = await pool.query('SELECT COUNT(*) as count FROM venues');
+    const validCoords = await pool.query('SELECT COUNT(*) as count FROM venues WHERE latitude != 0 AND longitude != 0');
+    const sampleVenues = await pool.query('SELECT name, latitude, longitude, location_object FROM venues LIMIT 3');
+
+    res.json({
+      debug: true,
+      totalVenues: totalCount.rows[0].count,
+      validCoordinates: validCoords.rows[0].count,
+      sampleVenues: sampleVenues.rows,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Debug endpoint error:', error);
+    res.status(500).json({ error: 'Debug failed', details: error.message });
+  }
+});
+
 // Admin endpoint - Import venues
 app.post('/admin/import-venues', async (req, res) => {
   try {
