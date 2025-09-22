@@ -12,6 +12,7 @@ const PORT = process.env.PORT || 3001;
 
 AWS.config.update({ region: 'eu-west-2' });
 const ssm = new AWS.SSM();
+const secretsManager = new AWS.SecretsManager();
 
 let pool;
 
@@ -35,27 +36,29 @@ async function initializeDatabase() {
   try {
     console.log('🔄 Initializing database connection...');
 
-    let connectionString;
+    console.log('🔍 Retrieving database credentials from Secrets Manager...');
 
-    if (process.env.DATABASE_URL) {
-      connectionString = process.env.DATABASE_URL;
-      console.log('✅ Using DATABASE_URL from environment');
-    } else {
-      console.log('🔍 Retrieving connection string from Parameter Store...');
-      const parameter = await ssm.getParameter({
-        Name: '/bndy/production/aurora/connection-string',
-        WithDecryption: true
-      }).promise();
+    // Get credentials from Secrets Manager
+    const secretResponse = await secretsManager.getSecretValue({
+      SecretId: 'bndy-production-aurora-password-v2'
+    }).promise();
 
-      connectionString = parameter.Parameter.Value;
-      console.log('✅ Retrieved connection string from Parameter Store');
-    }
+    const secret = JSON.parse(secretResponse.SecretString);
+    const { username, password } = secret;
+
+    console.log('✅ Retrieved credentials from Secrets Manager');
+
+    // Build connection string with retrieved credentials
+    const connectionString = `postgresql://${username}:${encodeURIComponent(password)}@bndy-production-cluster.cluster-ch2q4a408jrc.eu-west-2.rds.amazonaws.com:3306/bndy`;
+
+    console.log('🔗 Connecting to Aurora PostgreSQL...');
 
     pool = new Pool({
       connectionString: connectionString,
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
+      ssl: false  // Aurora within AWS doesn't require SSL
     });
 
     const client = await pool.connect();
