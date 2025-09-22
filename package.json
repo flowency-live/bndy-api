@@ -1,0 +1,23 @@
+{
+  "name": "bndy-api",
+  "version": "1.0.0",
+  "description": "BNDY Platform Unified API - Express.js backend for bndy-live and admin interface",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "pg": "^8.11.3",
+    "dotenv": "^17.2.2",
+    "aws-sdk": "^2.1467.0"
+  },
+  "keywords": ["bndy", "api", "express", "postgresql", "aws"],
+  "author": "BNDY Platform",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
