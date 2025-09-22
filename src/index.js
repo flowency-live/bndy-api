@@ -27,6 +27,11 @@ app.get('/health', (req, res) => {
 });
 
 async function initializeDatabase() {
+  if (pool) {
+    // Already initialized
+    return true;
+  }
+
   try {
     console.log('🔄 Initializing database connection...');
 
@@ -126,6 +131,10 @@ async function initializeSchema() {
 // GET all venues (for bndy-live map)
 app.get('/api/venues', async (req, res) => {
   try {
+    // Ensure database is initialized
+    if (!pool) {
+      await initializeDatabase();
+    }
     const result = await pool.query(`
       SELECT
         id, name, address,
@@ -149,6 +158,10 @@ app.get('/api/venues', async (req, res) => {
 // GET single venue by ID
 app.get('/api/venues/:id', async (req, res) => {
   try {
+    // Ensure database is initialized
+    if (!pool) {
+      await initializeDatabase();
+    }
     const result = await pool.query(`
       SELECT
         id, name, address,
@@ -182,6 +195,10 @@ app.get('/api/venues/:id', async (req, res) => {
 // Admin endpoint - Import venues
 app.post('/admin/import-venues', async (req, res) => {
   try {
+    // Ensure database is initialized
+    if (!pool) {
+      await initializeDatabase();
+    }
     const { venues } = req.body;
 
     if (!venues || !Array.isArray(venues)) {
@@ -255,20 +272,21 @@ app.post('/admin/import-venues', async (req, res) => {
 });
 
 async function startServer() {
-  try {
-    await initializeDatabase();
+  // Start server without requiring database connection
+  // Database will be initialized on first API call
+  app.listen(PORT, () => {
+    console.log('🚀 BNDY API Server Started');
+    console.log(`📡 Listening on port ${PORT}`);
+    console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+    console.log(`📍 Venues API: http://localhost:${PORT}/api/venues`);
+    console.log('');
+    console.log('📝 Note: Database connection will be established on first API call');
+  });
 
-    app.listen(PORT, () => {
-      console.log('🚀 BNDY API Server Started');
-      console.log(`📡 Listening on port ${PORT}`);
-      console.log(`🌐 Health check: http://localhost:${PORT}/health`);
-      console.log(`📍 Venues API: http://localhost:${PORT}/api/venues`);
-    });
-
-  } catch (error) {
-    console.error('❌ Server startup failed:', error);
-    process.exit(1);
-  }
+  // Try to initialize database in background (non-blocking)
+  initializeDatabase().catch(error => {
+    console.warn('⚠️ Database initialization failed on startup (will retry on first API call):', error.message);
+  });
 }
 
 process.on('SIGINT', async () => {
