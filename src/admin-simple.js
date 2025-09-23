@@ -168,23 +168,26 @@ module.exports = function(app, getPool, initializeDatabase) {
         ORDER BY table_name;
       `);
 
-      // Check current data counts
-      const counts = await Promise.all([
-        pool.query('SELECT COUNT(*) FROM venues'),
-        pool.query('SELECT COUNT(*) FROM artists'),
-        pool.query('SELECT COUNT(*) FROM songs'),
-        pool.query('SELECT COUNT(*) FROM events')
-      ]);
+      // Check current data counts (handle tables that may not exist)
+      const getCounts = async () => {
+        const results = {};
+        try { results.venues = (await pool.query('SELECT COUNT(*) FROM venues')).rows[0].count; } catch { results.venues = 0; }
+        try { results.artists = (await pool.query('SELECT COUNT(*) FROM artists')).rows[0].count; } catch { results.artists = 0; }
+        try { results.songs = (await pool.query('SELECT COUNT(*) FROM songs')).rows[0].count; } catch { results.songs = 0; }
+        try { results.events = (await pool.query('SELECT COUNT(*) FROM events')).rows[0].count; } catch { results.events = 0; }
+        return results;
+      };
+      const counts = await getCounts();
 
       res.json({
         success: true,
         message: 'Schema updated successfully',
         tables: tablesResult.rows.map(row => row.table_name),
         counts: {
-          venues: parseInt(counts[0].rows[0].count),
-          artists: parseInt(counts[1].rows[0].count),
-          songs: parseInt(counts[2].rows[0].count),
-          events: parseInt(counts[3].rows[0].count)
+          venues: parseInt(counts.venues),
+          artists: parseInt(counts.artists),
+          songs: parseInt(counts.songs),
+          events: parseInt(counts.events)
         },
         timestamp: new Date().toISOString()
       });
