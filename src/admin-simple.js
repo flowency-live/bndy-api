@@ -1007,4 +1007,139 @@ module.exports = function(app, getPool, initializeDatabase) {
       res.status(500).json({ error: 'Failed to fetch band events' });
     }
   });
+
+  // =============================
+  // BANDS API ENDPOINTS (using artists table)
+  // =============================
+
+  // Admin API: Create band (creates entry in artists table)
+  app.post('/admin/bands', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const {
+        name, slug, description, avatarUrl, allowedEventTypes, createdBy
+      } = req.body;
+
+      const result = await pool.query(`
+        INSERT INTO artists (
+          name, slug, description, avatar_url, allowed_event_types, created_by,
+          artist_type, claimed_by_user_id, is_claimed, source_platform
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'band', $6, true, 'bndy-backstage')
+        RETURNING
+          id, name, slug, description, avatar_url as "avatarUrl",
+          allowed_event_types as "allowedEventTypes", created_by as "createdBy",
+          artist_type as "artistType", claimed_by_user_id as "claimedByUserId",
+          is_claimed as "isClaimed", created_at as "createdAt", updated_at as "updatedAt"
+      `, [name, slug, description, avatarUrl, allowedEventTypes || ['practice', 'public_gig'], createdBy]);
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('Error creating band:', error);
+      if (error.code === '23505') { // Unique constraint violation
+        return res.status(409).json({ error: 'Band slug already exists' });
+      }
+      res.status(500).json({ error: 'Failed to create band' });
+    }
+  });
+
+  // Admin API: Get bands for user
+  app.get('/admin/bands/user/:userId', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { userId } = req.params;
+
+      const result = await pool.query(`
+        SELECT
+          a.id, a.name, a.slug, a.description, a.avatar_url as "avatarUrl",
+          a.allowed_event_types as "allowedEventTypes", a.created_by as "createdBy",
+          ub.role, ub.display_name as "displayName", ub.icon, ub.color,
+          ub.joined_at as "joinedAt", ub.id as "membershipId"
+        FROM artists a
+        INNER JOIN user_bands ub ON a.id = ub.band_id
+        WHERE ub.user_id = $1 AND a.artist_type = 'band'
+        ORDER BY ub.joined_at ASC
+      `, [userId]);
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error('Error fetching user bands:', error);
+      res.status(500).json({ error: 'Failed to fetch user bands' });
+    }
+  });
+
+  // =============================
+  // USER-BANDS API ENDPOINTS (band membership)
+  // =============================
+
+  // Admin API: Create band membership
+  app.post('/admin/user-bands', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const {
+        userId, bandId, role, displayName, icon, color, avatarUrl
+      } = req.body;
+
+      const result = await pool.query(`
+        INSERT INTO user_bands (
+          user_id, band_id, role, display_name, icon, color, avatar_url
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING
+          id, user_id as "userId", band_id as "bandId", role,
+          display_name as "displayName", icon, color, avatar_url as "avatarUrl",
+          joined_at as "joinedAt"
+      `, [userId, bandId, role, displayName, icon, color, avatarUrl]);
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('Error creating band membership:', error);
+      if (error.code === '23505') { // Unique constraint violation
+        return res.status(409).json({ error: 'User is already a member of this band' });
+      }
+      res.status(500).json({ error: 'Failed to create band membership' });
+    }
+  });
+
+  // Admin API: Get band members
+  app.get('/admin/bands/:bandId/members', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { bandId } = req.params;
+
+      const result = await pool.query(`
+        SELECT
+          ub.id, ub.user_id as "userId", ub.band_id as "bandId", ub.role,
+          ub.display_name as "displayName", ub.icon, ub.color,
+          ub.avatar_url as "avatarUrl", ub.joined_at as "joinedAt",
+          u.first_name as "firstName", u.last_name as "lastName",
+          u.phone, u.email
+        FROM user_bands ub
+        INNER JOIN users u ON ub.user_id = u.id
+        WHERE ub.band_id = $1
+        ORDER BY ub.joined_at ASC
+      `, [bandId]);
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error('Error fetching band members:', error);
+      res.status(500).json({ error: 'Failed to fetch band members' });
+    }
+  });
 };
