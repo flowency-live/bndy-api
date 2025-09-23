@@ -790,6 +790,47 @@ module.exports = function(app, getPool, initializeDatabase) {
     }
   });
 
+  // Admin API: Get user by ID
+  app.get('/admin/users/:id', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { id } = req.params;
+      const result = await pool.query(
+        'SELECT * FROM users WHERE id = $1',
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const user = result.rows[0];
+      res.json({
+        id: user.id,
+        supabaseId: user.supabase_id,
+        phone: user.phone,
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        displayName: user.display_name,
+        hometown: user.hometown,
+        instrument: user.instrument,
+        avatarUrl: user.avatar_url,
+        platformAdmin: user.platform_admin,
+        profileCompleted: user.profile_completed,
+        createdAt: user.created_at,
+        updatedAt: user.updated_at
+      });
+    } catch (error) {
+      console.error('Error fetching user:', error);
+      res.status(500).json({ error: 'Failed to fetch user' });
+    }
+  });
+
   // Admin API: Get user by supabaseId (for auth integration)
   app.get('/admin/users/by-supabase/:supabaseId', async (req, res) => {
     try {
