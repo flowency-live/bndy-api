@@ -301,7 +301,7 @@ app.post('/admin/import-venues', async (req, res) => {
 
 
 // Add admin routes for artists and songs
-const addAdminRoutes = require('./admin-routes');
+const addAdminRoutes = require('./admin-test');
 addAdminRoutes(app, pool, initializeDatabase);
 
 async function startServer() {
