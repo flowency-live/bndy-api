@@ -831,6 +831,79 @@ module.exports = function(app, getPool, initializeDatabase) {
     }
   });
 
+  // Admin API: Update user by ID
+  app.put('/admin/users/:id', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { id } = req.params;
+      const updateData = req.body;
+
+      // Build dynamic update query
+      const updateFields = [];
+      const values = [];
+      let paramIndex = 1;
+
+      const fieldMap = {
+        firstName: 'first_name',
+        lastName: 'last_name',
+        displayName: 'display_name',
+        hometown: 'hometown',
+        instrument: 'instrument',
+        avatarUrl: 'avatar_url',
+        platformAdmin: 'platform_admin',
+        profileCompleted: 'profile_completed',
+        phone: 'phone',
+        email: 'email'
+      };
+
+      for (const [key, value] of Object.entries(updateData)) {
+        const dbField = fieldMap[key];
+        if (dbField) {
+          updateFields.push(`${dbField} = $${paramIndex}`);
+          values.push(value);
+          paramIndex++;
+        }
+      }
+
+      if (updateFields.length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+
+      // Add updated_at timestamp
+      updateFields.push(`updated_at = NOW()`);
+
+      const updateQuery = `
+        UPDATE users
+        SET ${updateFields.join(', ')}
+        WHERE id = $${paramIndex}
+        RETURNING
+          id, supabase_id as "supabaseId", phone, email,
+          first_name as "firstName", last_name as "lastName",
+          display_name as "displayName", hometown, avatar_url as "avatarUrl",
+          instrument, platform_admin as "platformAdmin",
+          profile_completed as "profileCompleted",
+          created_at as "createdAt", updated_at as "updatedAt"
+      `;
+
+      values.push(id);
+
+      const result = await pool.query(updateQuery, values);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('Error updating user:', error);
+      res.status(500).json({ error: 'Failed to update user' });
+    }
+  });
+
   // Admin API: Get user by supabaseId (for auth integration)
   app.get('/admin/users/by-supabase/:supabaseId', async (req, res) => {
     try {
