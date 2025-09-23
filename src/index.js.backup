@@ -299,11 +299,6 @@ app.post('/admin/import-venues', async (req, res) => {
   }
 });
 
-
-// Add admin routes for artists and songs
-const addAdminRoutes = require('./admin-simple');
-addAdminRoutes(app, pool, initializeDatabase);
-
 async function startServer() {
   // Start server without requiring database connection
   // Database will be initialized on first API call
