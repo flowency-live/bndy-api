@@ -157,6 +157,177 @@ module.exports = function(app, getPool, initializeDatabase) {
         );
       `);
 
+      // 5. Users table (bndy-backstage user profiles)
+      console.log('👤 Creating users table...');
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          supabase_id TEXT UNIQUE,
+          phone TEXT UNIQUE,
+          email TEXT UNIQUE,
+
+          -- Profile fields - mandatory after authentication
+          first_name TEXT,
+          last_name TEXT,
+          display_name TEXT,
+          hometown TEXT, -- UK Google Places autocomplete
+          avatar_url TEXT,
+          instrument TEXT, -- from predefined list
+
+          -- System fields
+          platform_admin BOOLEAN DEFAULT false, -- Platform administrator role
+          profile_completed BOOLEAN DEFAULT false, -- Track if mandatory profile fields are set
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+      `);
+
+      // Create indexes for users
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_users_supabase_id ON users (supabase_id);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_users_phone ON users (phone);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_users_display_name ON users (display_name);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_users_hometown ON users (hometown);');
+
+      // 6. Enhance artists table for bndy-backstage claiming (add missing fields)
+      console.log('🎨 Enhancing artists table for band claiming...');
+      await pool.query(`
+        ALTER TABLE artists
+        ADD COLUMN IF NOT EXISTS claimed_by_user_id UUID,
+        ADD COLUMN IF NOT EXISTS artist_type VARCHAR(50) DEFAULT 'band',
+        ADD COLUMN IF NOT EXISTS description TEXT,
+        ADD COLUMN IF NOT EXISTS avatar_url TEXT,
+        ADD COLUMN IF NOT EXISTS allowed_event_types TEXT[] DEFAULT '{"practice","public_gig"}',
+        ADD COLUMN IF NOT EXISTS created_by UUID,
+        ADD COLUMN IF NOT EXISTS slug TEXT
+      `);
+
+      // Add unique constraint for slug if it doesn't exist
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'artists_slug_unique') THEN
+            ALTER TABLE artists ADD CONSTRAINT artists_slug_unique UNIQUE (slug);
+          END IF;
+        END $$;
+      `);
+
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_artists_claimed_by ON artists (claimed_by_user_id);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_artists_type ON artists (artist_type);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_artists_slug ON artists (slug);');
+
+      // 7. bndy-backstage supporting tables
+      console.log('👥 Creating bndy-backstage supporting tables...');
+
+      // user_bands (band membership)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_bands (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          band_id UUID REFERENCES artists(id) ON DELETE CASCADE, -- References artists table (not separate bands)
+          role TEXT NOT NULL DEFAULT 'member', -- 'owner', 'admin', 'member'
+          display_name TEXT NOT NULL,
+          icon TEXT NOT NULL,
+          color TEXT NOT NULL,
+          avatar_url TEXT, -- Optional member avatar URL
+          joined_at TIMESTAMP DEFAULT NOW(),
+          UNIQUE(user_id, band_id)
+        );
+      `);
+
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_user_bands_user ON user_bands (user_id);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_user_bands_band ON user_bands (band_id);');
+
+      // invitations
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS invitations (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          band_id UUID REFERENCES artists(id) ON DELETE CASCADE, -- References artists table
+          inviter_membership_id UUID REFERENCES user_bands(id) ON DELETE CASCADE,
+          contact_info TEXT NOT NULL, -- phone or email
+          contact_type TEXT NOT NULL, -- 'phone' or 'email'
+          role TEXT NOT NULL DEFAULT 'member',
+          token TEXT NOT NULL UNIQUE,
+          expires_at TIMESTAMP NOT NULL,
+          accepted_at TIMESTAMP,
+          invitee_user_id UUID REFERENCES users(id),
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+      `);
+
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_invitations_band ON invitations (band_id);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations (token);');
+
+      // 8. Events table (unified for bndy-live + bndy-backstage)
+      console.log('📅 Creating unified events table...');
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS events (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          band_id UUID REFERENCES artists(id), -- Links to artists table (unified bands/artists)
+          owner_user_id UUID REFERENCES users(id), -- For personal events (XOR with band_id)
+          type TEXT NOT NULL, -- 'practice', 'meeting', 'recording', 'private_booking', 'public_gig', 'festival', 'unavailable'
+          title TEXT,
+          date TEXT NOT NULL, -- YYYY-MM-DD format
+          end_date TEXT, -- Optional, for date ranges
+          start_time TEXT, -- HH:MM format (24h)
+          end_time TEXT, -- HH:MM format (24h)
+          location TEXT, -- For private events
+          venue TEXT, -- For public events (text name)
+          notes TEXT,
+          is_public BOOLEAN DEFAULT false, -- TRUE for public gigs/festivals visible on bndy-live
+          membership_id UUID REFERENCES user_bands(id), -- bndy-backstage context
+          is_all_day BOOLEAN DEFAULT false,
+          created_by_membership_id UUID REFERENCES user_bands(id),
+          created_at TIMESTAMP DEFAULT NOW(),
+
+          -- Performance fields for bndy-live map queries (denormalized from venue)
+          latitude DECIMAL(10, 8), -- Copied from venues table
+          longitude DECIMAL(11, 8), -- Copied from venues table
+          venue_id UUID REFERENCES venues(id), -- Proper reference to venues
+
+          -- XOR constraint: exactly one of band_id or owner_user_id must be non-null
+          CONSTRAINT events_ownership_xor CHECK (
+            (band_id IS NOT NULL AND owner_user_id IS NULL) OR
+            (band_id IS NULL AND owner_user_id IS NOT NULL)
+          )
+        );
+      `);
+
+      -- CRITICAL PERFORMANCE INDEXES for map-based queries
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_map_query ON events (latitude, longitude, date) WHERE is_public = true AND date >= CURRENT_DATE`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_venue_public ON events (venue_id, date) WHERE is_public = true AND date >= CURRENT_DATE`);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_events_band_date ON events (band_id, date);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_events_user_date ON events (owner_user_id, date);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_events_public ON events (is_public, date);');
+
+      // 9. Song readiness tracking (bndy-backstage)
+      console.log('🎵 Creating song management tables...');
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS song_readiness (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          song_id UUID REFERENCES songs(id) ON DELETE CASCADE,
+          membership_id UUID REFERENCES user_bands(id) ON DELETE CASCADE, -- Band member readiness
+          status TEXT NOT NULL, -- 'red', 'amber', 'green'
+          updated_at TIMESTAMP DEFAULT NOW(),
+          UNIQUE(song_id, membership_id)
+        );
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS song_vetos (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          song_id UUID REFERENCES songs(id) ON DELETE CASCADE,
+          membership_id UUID REFERENCES user_bands(id) ON DELETE CASCADE, -- Band member veto
+          created_at TIMESTAMP DEFAULT NOW(),
+          UNIQUE(song_id, membership_id)
+        );
+      `);
+
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_song_readiness_song ON song_readiness (song_id);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_song_readiness_member ON song_readiness (membership_id);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_song_vetos_song ON song_vetos (song_id);');
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_song_vetos_member ON song_vetos (membership_id);');
+
       await pool.query('COMMIT');
 
       // Verify tables were created
@@ -164,7 +335,10 @@ module.exports = function(app, getPool, initializeDatabase) {
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = 'public'
-        AND table_name IN ('artists', 'songs', 'artist_songs', 'venues')
+        AND table_name IN (
+          'artists', 'songs', 'artist_songs', 'venues', 'users',
+          'user_bands', 'invitations', 'events', 'song_readiness', 'song_vetos'
+        )
         ORDER BY table_name;
       `);
 
@@ -174,7 +348,11 @@ module.exports = function(app, getPool, initializeDatabase) {
         try { results.venues = (await pool.query('SELECT COUNT(*) FROM venues')).rows[0].count; } catch { results.venues = 0; }
         try { results.artists = (await pool.query('SELECT COUNT(*) FROM artists')).rows[0].count; } catch { results.artists = 0; }
         try { results.songs = (await pool.query('SELECT COUNT(*) FROM songs')).rows[0].count; } catch { results.songs = 0; }
+        try { results.users = (await pool.query('SELECT COUNT(*) FROM users')).rows[0].count; } catch { results.users = 0; }
         try { results.events = (await pool.query('SELECT COUNT(*) FROM events')).rows[0].count; } catch { results.events = 0; }
+        try { results.user_bands = (await pool.query('SELECT COUNT(*) FROM user_bands')).rows[0].count; } catch { results.user_bands = 0; }
+        try { results.invitations = (await pool.query('SELECT COUNT(*) FROM invitations')).rows[0].count; } catch { results.invitations = 0; }
+        try { results.song_readiness = (await pool.query('SELECT COUNT(*) FROM song_readiness')).rows[0].count; } catch { results.song_readiness = 0; }
         return results;
       };
       const counts = await getCounts();
@@ -435,6 +613,213 @@ module.exports = function(app, getPool, initializeDatabase) {
     } catch (error) {
       console.error('Error fetching songs:', error);
       res.status(500).json({ error: 'Failed to fetch songs' });
+    }
+  });
+
+  // =============================
+  // USERS API ENDPOINTS
+  // =============================
+
+  // Public API: Get all users
+  app.get('/api/users', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const result = await pool.query(`
+        SELECT
+          id, supabase_id as "supabaseId", phone, email,
+          first_name as "firstName", last_name as "lastName",
+          display_name as "displayName", hometown, avatar_url as "avatarUrl",
+          instrument, platform_admin as "platformAdmin",
+          profile_completed as "profileCompleted",
+          created_at as "createdAt", updated_at as "updatedAt"
+        FROM users
+        ORDER BY display_name NULLS LAST, first_name NULLS LAST, created_at DESC
+      `);
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      res.status(500).json({ error: 'Failed to fetch users' });
+    }
+  });
+
+  // Admin API: Create user
+  app.post('/admin/users', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const {
+        supabaseId, phone, email, firstName, lastName,
+        displayName, hometown, avatarUrl, instrument, platformAdmin
+      } = req.body;
+
+      // Validate required fields for profile completion
+      const profileCompleted = !!(firstName && lastName && displayName && hometown && instrument);
+
+      const result = await pool.query(`
+        INSERT INTO users (
+          supabase_id, phone, email, first_name, last_name,
+          display_name, hometown, avatar_url, instrument,
+          platform_admin, profile_completed
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING
+          id, supabase_id as "supabaseId", phone, email,
+          first_name as "firstName", last_name as "lastName",
+          display_name as "displayName", hometown, avatar_url as "avatarUrl",
+          instrument, platform_admin as "platformAdmin",
+          profile_completed as "profileCompleted",
+          created_at as "createdAt", updated_at as "updatedAt"
+      `, [
+        supabaseId, phone, email, firstName, lastName,
+        displayName, hometown, avatarUrl, instrument,
+        platformAdmin || false, profileCompleted
+      ]);
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('Error creating user:', error);
+      if (error.code === '23505') { // Unique constraint violation
+        return res.status(409).json({ error: 'User already exists with this phone/email/supabaseId' });
+      }
+      res.status(500).json({ error: 'Failed to create user' });
+    }
+  });
+
+  // Admin API: Update user
+  app.put('/admin/users/:id', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { id } = req.params;
+      const updates = req.body;
+
+      // Build dynamic update query
+      const updateFields = [];
+      const values = [];
+      let paramIndex = 1;
+
+      const allowedFields = [
+        'phone', 'email', 'first_name', 'last_name', 'display_name',
+        'hometown', 'avatar_url', 'instrument', 'platform_admin'
+      ];
+
+      for (const field of allowedFields) {
+        if (updates[field] !== undefined) {
+          updateFields.push(`${field} = $${paramIndex}`);
+          values.push(updates[field]);
+          paramIndex++;
+        }
+      }
+
+      if (updateFields.length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+
+      // Always update the updated_at timestamp
+      updateFields.push(`updated_at = NOW()`);
+
+      // Check profile completion after update
+      updateFields.push(`profile_completed = (
+        first_name IS NOT NULL AND first_name != '' AND
+        last_name IS NOT NULL AND last_name != '' AND
+        display_name IS NOT NULL AND display_name != '' AND
+        hometown IS NOT NULL AND hometown != '' AND
+        instrument IS NOT NULL AND instrument != ''
+      )`);
+
+      values.push(id);
+
+      const result = await pool.query(`
+        UPDATE users
+        SET ${updateFields.join(', ')}
+        WHERE id = $${paramIndex}
+        RETURNING
+          id, supabase_id as "supabaseId", phone, email,
+          first_name as "firstName", last_name as "lastName",
+          display_name as "displayName", hometown, avatar_url as "avatarUrl",
+          instrument, platform_admin as "platformAdmin",
+          profile_completed as "profileCompleted",
+          created_at as "createdAt", updated_at as "updatedAt"
+      `, values);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('Error updating user:', error);
+      if (error.code === '23505') { // Unique constraint violation
+        return res.status(409).json({ error: 'Phone or email already in use' });
+      }
+      res.status(500).json({ error: 'Failed to update user' });
+    }
+  });
+
+  // Admin API: Delete user
+  app.delete('/admin/users/:id', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { id } = req.params;
+
+      const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [id]);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      res.json({ success: true, message: 'User deleted successfully' });
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      res.status(500).json({ error: 'Failed to delete user' });
+    }
+  });
+
+  // Admin API: Get user by supabaseId (for auth integration)
+  app.get('/admin/users/by-supabase/:supabaseId', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { supabaseId } = req.params;
+
+      const result = await pool.query(`
+        SELECT
+          id, supabase_id as "supabaseId", phone, email,
+          first_name as "firstName", last_name as "lastName",
+          display_name as "displayName", hometown, avatar_url as "avatarUrl",
+          instrument, platform_admin as "platformAdmin",
+          profile_completed as "profileCompleted",
+          created_at as "createdAt", updated_at as "updatedAt"
+        FROM users
+        WHERE supabase_id = $1
+      `, [supabaseId]);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('Error fetching user by supabaseId:', error);
+      res.status(500).json({ error: 'Failed to fetch user' });
     }
   });
 };
