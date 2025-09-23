@@ -293,7 +293,7 @@ module.exports = function(app, getPool, initializeDatabase) {
         );
       `);
 
-      -- CRITICAL PERFORMANCE INDEXES for map-based queries
+      // CRITICAL PERFORMANCE INDEXES for map-based queries
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_map_query ON events (latitude, longitude, date) WHERE is_public = true AND date >= CURRENT_DATE`);
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_events_venue_public ON events (venue_id, date) WHERE is_public = true AND date >= CURRENT_DATE`);
       await pool.query('CREATE INDEX IF NOT EXISTS idx_events_band_date ON events (band_id, date);');
