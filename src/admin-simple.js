@@ -1,7 +1,7 @@
 // Admin endpoints for schema management and data import
 
 module.exports = function(app, getPool, initializeDatabase) {
-  console.log('🔧 Adding admin endpoints...');
+  console.log('🔧 Adding admin endpoints for schema and data...');
 
   // Health check endpoint
   app.get('/admin/test', (req, res) => {
