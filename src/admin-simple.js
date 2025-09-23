@@ -196,4 +196,242 @@ module.exports = function(app, getPool, initializeDatabase) {
       res.status(500).json({ error: 'Schema update failed', details: error.message });
     }
   });
+
+  // Import artists endpoint
+  app.post('/admin/import-artists', async (req, res) => {
+    try {
+      console.log('🎤 Admin: Importing artists...');
+
+      if (!await initializeDatabase()) {
+        return res.status(500).json({ error: 'Database connection failed' });
+      }
+
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { artists } = req.body;
+
+      if (!artists || !Array.isArray(artists)) {
+        return res.status(400).json({ error: 'Invalid artists data - expected array' });
+      }
+
+      let imported = 0;
+      let skipped = 0;
+
+      for (const artist of artists) {
+        try {
+          // Skip bands (sourceType === 'band') as requested
+          if (artist.sourceType === 'band') {
+            skipped++;
+            continue;
+          }
+
+          // Transform social media URLs
+          const socialUrls = artist.socialMediaURLs || [];
+          const facebookUrl = socialUrls.find(s => s.platform === 'facebook')?.url || '';
+          const instagramUrl = socialUrls.find(s => s.platform === 'instagram')?.url || '';
+          const websiteUrl = socialUrls.find(s => s.platform === 'website')?.url || '';
+
+          const query = `
+            INSERT INTO artists (
+              name, bio, location, genres, facebook_url, instagram_url, website_url,
+              social_media_urls, profile_image_url, migrated_from_id, source_platform, created_by_platform
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ON CONFLICT (migrated_from_id) DO UPDATE SET
+              name = EXCLUDED.name,
+              bio = EXCLUDED.bio,
+              updated_at = NOW()
+          `;
+
+          await pool.query(query, [
+            artist.name || '',
+            artist.bio || '',
+            artist.location || '',
+            artist.genres || [],
+            facebookUrl,
+            instagramUrl,
+            websiteUrl,
+            JSON.stringify(socialUrls),
+            artist.profileImageUrl || '',
+            artist.id, // Original Firestore ID
+            'firestore-migration',
+            'bndy-live'
+          ]);
+
+          imported++;
+        } catch (artistError) {
+          console.warn(`⚠️ Skipping artist ${artist.name}: ${artistError.message}`);
+          skipped++;
+        }
+      }
+
+      res.json({
+        success: true,
+        imported,
+        skipped,
+        total: artists.length,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('❌ Artist import failed:', error);
+      res.status(500).json({ error: 'Artist import failed', details: error.message });
+    }
+  });
+
+  // Import songs endpoint
+  app.post('/admin/import-songs', async (req, res) => {
+    try {
+      console.log('🎵 Admin: Importing songs...');
+
+      if (!await initializeDatabase()) {
+        return res.status(500).json({ error: 'Database connection failed' });
+      }
+
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { songs } = req.body;
+
+      if (!songs || !Array.isArray(songs)) {
+        return res.status(400).json({ error: 'Invalid songs data - expected array' });
+      }
+
+      let imported = 0;
+      let skipped = 0;
+
+      for (const song of songs) {
+        try {
+          // For now, import songs without artist linkage (since artist names may not match exactly)
+          // Future enhancement: implement artist name matching/lookup
+
+          const streamingUrls = song.streamingUrls || {};
+
+          const query = `
+            INSERT INTO songs (
+              title, artist_name, duration_seconds, genre, release_date,
+              spotify_url, apple_music_url, youtube_url, soundcloud_url, bandcamp_url,
+              audio_file_url, audio_format, bpm, key_signature, lyrics, description, tags,
+              is_featured, migrated_from_id, source_platform
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+            ON CONFLICT (migrated_from_id) DO UPDATE SET
+              title = EXCLUDED.title,
+              updated_at = NOW()
+          `;
+
+          await pool.query(query, [
+            song.title || '',
+            song.artistName || '',
+            song.duration || null,
+            song.genre || '',
+            song.releaseDate || null,
+            streamingUrls.spotify || '',
+            streamingUrls.appleMusic || '',
+            streamingUrls.youtube || '',
+            streamingUrls.soundcloud || '',
+            streamingUrls.bandcamp || '',
+            song.audioFileUrl || '',
+            song.audioFormat || '',
+            song.bpm || null,
+            song.keySignature || '',
+            song.lyrics || '',
+            song.description || '',
+            song.tags || [],
+            song.isFeatured || false,
+            song.id, // Original Firestore ID
+            'firestore-migration'
+          ]);
+
+          imported++;
+        } catch (songError) {
+          console.warn(`⚠️ Skipping song ${song.title}: ${songError.message}`);
+          skipped++;
+        }
+      }
+
+      res.json({
+        success: true,
+        imported,
+        skipped,
+        total: songs.length,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('❌ Song import failed:', error);
+      res.status(500).json({ error: 'Song import failed', details: error.message });
+    }
+  });
+
+  // Get artists endpoint
+  app.get('/api/artists', async (req, res) => {
+    try {
+      if (!await initializeDatabase()) {
+        return res.status(500).json({ error: 'Database connection failed' });
+      }
+
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const result = await pool.query(`
+        SELECT
+          id, name, bio, location, genres,
+          facebook_url as "facebookUrl",
+          instagram_url as "instagramUrl",
+          website_url as "websiteUrl",
+          social_media_urls as "socialMediaUrls",
+          profile_image_url as "profileImageUrl",
+          is_verified as "isVerified",
+          follower_count as "followerCount",
+          claimed_by_user_id as "claimedByUserId",
+          created_at as "createdAt"
+        FROM artists
+        ORDER BY name
+      `);
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error('Error fetching artists:', error);
+      res.status(500).json({ error: 'Failed to fetch artists' });
+    }
+  });
+
+  // Get songs endpoint
+  app.get('/api/songs', async (req, res) => {
+    try {
+      if (!await initializeDatabase()) {
+        return res.status(500).json({ error: 'Database connection failed' });
+      }
+
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const result = await pool.query(`
+        SELECT
+          id, title, artist_name as "artistName", duration_seconds as "duration",
+          genre, release_date as "releaseDate", album,
+          spotify_url as "spotifyUrl",
+          apple_music_url as "appleMusicUrl",
+          youtube_url as "youtubeUrl",
+          audio_file_url as "audioFileUrl",
+          is_featured as "isFeatured",
+          tags, created_at as "createdAt"
+        FROM songs
+        ORDER BY title
+      `);
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error('Error fetching songs:', error);
+      res.status(500).json({ error: 'Failed to fetch songs' });
+    }
+  });
 };
