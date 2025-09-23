@@ -822,4 +822,189 @@ module.exports = function(app, getPool, initializeDatabase) {
       res.status(500).json({ error: 'Failed to fetch user' });
     }
   });
+
+  // =============================
+  // EVENTS API ENDPOINTS
+  // =============================
+
+  // Public API: Get all public events (for bndy-live)
+  app.get('/api/events', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const result = await pool.query(`
+        SELECT
+          e.id, e.title, e.date, e.start_time as "startTime", e.end_time as "endTime",
+          e.location, e.venue, e.notes, e.latitude, e.longitude,
+          e.venue_id as "venueId", e.band_id as "bandId",
+          a.name as "bandName", a.genres,
+          v.name as "venueName", v.address as "venueAddress"
+        FROM events e
+        LEFT JOIN artists a ON e.band_id = a.id
+        LEFT JOIN venues v ON e.venue_id = v.id
+        WHERE e.is_public = true
+        ORDER BY e.date ASC, e.start_time ASC
+      `);
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error('Error fetching public events:', error);
+      res.status(500).json({ error: 'Failed to fetch events' });
+    }
+  });
+
+  // Admin API: Create event
+  app.post('/admin/events', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const {
+        bandId, ownerUserId, type, title, date, endDate, startTime, endTime,
+        location, venue, notes, isPublic, membershipId, isAllDay,
+        createdByMembershipId, latitude, longitude, venueId
+      } = req.body;
+
+      const result = await pool.query(`
+        INSERT INTO events (
+          band_id, owner_user_id, type, title, date, end_date, start_time, end_time,
+          location, venue, notes, is_public, membership_id, is_all_day,
+          created_by_membership_id, latitude, longitude, venue_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        RETURNING
+          id, band_id as "bandId", owner_user_id as "ownerUserId", type, title,
+          date, end_date as "endDate", start_time as "startTime", end_time as "endTime",
+          location, venue, notes, is_public as "isPublic", membership_id as "membershipId",
+          is_all_day as "isAllDay", created_by_membership_id as "createdByMembershipId",
+          latitude, longitude, venue_id as "venueId", created_at as "createdAt"
+      `, [
+        bandId, ownerUserId, type, title, date, endDate, startTime, endTime,
+        location, venue, notes, isPublic || false, membershipId, isAllDay || false,
+        createdByMembershipId, latitude, longitude, venueId
+      ]);
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('Error creating event:', error);
+      if (error.code === '23514') { // Check constraint violation (XOR)
+        return res.status(400).json({ error: 'Event must be owned by either a band OR a user, but not both' });
+      }
+      res.status(500).json({ error: 'Failed to create event' });
+    }
+  });
+
+  // Admin API: Update event
+  app.put('/admin/events/:id', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { id } = req.params;
+      const updates = req.body;
+
+      // Build dynamic update query
+      const updateFields = [];
+      const values = [];
+      let paramIndex = 1;
+
+      const allowedFields = [
+        'type', 'title', 'date', 'end_date', 'start_time', 'end_time',
+        'location', 'venue', 'notes', 'is_public', 'is_all_day',
+        'latitude', 'longitude', 'venue_id'
+      ];
+
+      for (const field of allowedFields) {
+        if (updates[field] !== undefined) {
+          updateFields.push(`${field} = $${paramIndex}`);
+          values.push(updates[field]);
+          paramIndex++;
+        }
+      }
+
+      if (updateFields.length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+
+      values.push(id);
+
+      const result = await pool.query(`
+        UPDATE events
+        SET ${updateFields.join(', ')}
+        WHERE id = $${paramIndex}
+        RETURNING
+          id, band_id as "bandId", owner_user_id as "ownerUserId", type, title,
+          date, end_date as "endDate", start_time as "startTime", end_time as "endTime",
+          location, venue, notes, is_public as "isPublic", membership_id as "membershipId",
+          is_all_day as "isAllDay", latitude, longitude, venue_id as "venueId", created_at as "createdAt"
+      `, values);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('Error updating event:', error);
+      res.status(500).json({ error: 'Failed to update event' });
+    }
+  });
+
+  // Admin API: Delete event
+  app.delete('/admin/events/:id', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { id } = req.params;
+
+      const result = await pool.query('DELETE FROM events WHERE id = $1 RETURNING id', [id]);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      res.json({ success: true, message: 'Event deleted successfully' });
+    } catch (error) {
+      console.error('Error deleting event:', error);
+      res.status(500).json({ error: 'Failed to delete event' });
+    }
+  });
+
+  // Admin API: Get events by band
+  app.get('/admin/events/band/:bandId', async (req, res) => {
+    try {
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
+      const { bandId } = req.params;
+
+      const result = await pool.query(`
+        SELECT
+          id, band_id as "bandId", type, title, date, end_date as "endDate",
+          start_time as "startTime", end_time as "endTime", location, venue, notes,
+          is_public as "isPublic", is_all_day as "isAllDay", latitude, longitude,
+          venue_id as "venueId", created_at as "createdAt"
+        FROM events
+        WHERE band_id = $1
+        ORDER BY date ASC, start_time ASC
+      `, [bandId]);
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error('Error fetching band events:', error);
+      res.status(500).json({ error: 'Failed to fetch band events' });
+    }
+  });
 };
