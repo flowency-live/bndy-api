@@ -70,10 +70,7 @@ async function initializeDatabase() {
 
     client.release();
 
-    // Register admin routes now that pool is available
-    const addAdminRoutes = require('./admin-simple');
-    addAdminRoutes(app, pool, initializeDatabase);
-    console.log('🔧 Admin routes registered');
+    console.log('✅ Database initialization complete');
 
     return true;
 
@@ -331,5 +328,10 @@ process.on('SIGINT', async () => {
   }
   process.exit(0);
 });
+
+// Register admin routes early (they'll initialize DB when called)
+const addAdminRoutes = require('./admin-simple');
+const getPool = () => pool;
+addAdminRoutes(app, getPool, initializeDatabase);
 
 startServer();

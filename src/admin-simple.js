@@ -1,6 +1,6 @@
 // Simplest possible admin endpoint to test database connection
 
-module.exports = function(app, pool, initializeDatabase) {
+module.exports = function(app, getPool, initializeDatabase) {
   console.log('🔧 Adding simple admin endpoints...');
 
   app.get('/admin/test', (req, res) => {
@@ -14,15 +14,20 @@ module.exports = function(app, pool, initializeDatabase) {
         console.log('❌ Database init failed');
         return res.status(500).json({ error: 'Database connection failed' });
       }
-      
+
       console.log('✅ Database init successful, testing query...');
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
       const result = await pool.query('SELECT COUNT(*) FROM venues');
       console.log('✅ Query successful');
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         venueCount: result.rows[0].count,
-        timestamp: new Date().toISOString() 
+        timestamp: new Date().toISOString()
       });
     } catch (error) {
       console.error('❌ Database test failed:', error);
@@ -38,6 +43,11 @@ module.exports = function(app, pool, initializeDatabase) {
       }
 
       console.log('📋 Creating test_artists table...');
+      const pool = getPool();
+      if (!pool) {
+        return res.status(500).json({ error: 'Pool not available' });
+      }
+
       await pool.query('CREATE TABLE IF NOT EXISTS test_artists (id SERIAL PRIMARY KEY, name TEXT)');
       console.log('✅ Table created successfully');
 
