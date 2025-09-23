@@ -69,6 +69,12 @@ async function initializeDatabase() {
     console.log(`📊 Found ${venueCount} venues in database`);
 
     client.release();
+
+    // Register admin routes now that pool is available
+    const addAdminRoutes = require('./admin-simple');
+    addAdminRoutes(app, pool, initializeDatabase);
+    console.log('🔧 Admin routes registered');
+
     return true;
 
   } catch (error) {
@@ -299,10 +305,6 @@ app.post('/admin/import-venues', async (req, res) => {
   }
 });
 
-
-// Add admin routes for artists and songs
-const addAdminRoutes = require('./admin-simple');
-addAdminRoutes(app, pool, initializeDatabase);
 
 async function startServer() {
   // Start server without requiring database connection
