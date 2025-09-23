@@ -164,7 +164,7 @@ module.exports = function(app, getPool, initializeDatabase) {
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = 'public'
-        AND table_name IN ('artists', 'songs', 'artist_songs', 'venues', 'events')
+        AND table_name IN ('artists', 'songs', 'artist_songs', 'venues')
         ORDER BY table_name;
       `);
 
