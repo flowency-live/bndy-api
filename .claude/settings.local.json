@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/VSProjects/bndy-dataconsolidation/**)",
+      "Read(//c/VSProjects/bndy-infrastructure/**)",
+      "Read(//c/VSProjects/bndy-backstage/**)",
+      "Read(//c/VSProjects/bndy All Platform Docs/Old Documentation/**)",
+      "Read(//c/VSProjects/bndy All Platform Docs/Troubleshooting Logs/**)",
+      "Bash(find:*)",
+      "Bash(for file in pages/admin.tsx pages/calendar.tsx pages/onboarding.tsx pages/songs.tsx components/add-song-modal.tsx components/gig-alert-banner.tsx components/side-nav.tsx)",
+      "Bash(do sed -i \"s/@\\/hooks\\/useSupabaseAuth/@\\/hooks\\/useCognitoAuth/g; s/useSupabaseAuth/useCognitoAuth/g\" \"$file\")",
+      "Bash(done)",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(aws:*)",
+      "Bash(powershell:*)",
+      "Read(//c/VSProjects/**)",
+      "mcp__ide__getDiagnostics",
+      "Bash(git revert:*)",
+      "Bash(npm install)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

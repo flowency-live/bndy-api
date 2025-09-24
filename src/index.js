@@ -4,6 +4,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
 const AWS = require('aws-sdk');
 
@@ -16,8 +17,14 @@ const secretsManager = new AWS.SecretsManager();
 
 let pool;
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production'
+    ? ['https://backstage.bndy.co.uk', 'https://bndy.live', 'https://bndy.co.uk']
+    : ['http://localhost:5173', 'http://localhost:3000'],
+  credentials: true
+}));
 app.use(express.json());
+app.use(cookieParser());
 
 app.get('/health', (req, res) => {
   res.json({
@@ -331,7 +338,9 @@ process.on('SIGINT', async () => {
 
 // Register admin routes early (they'll initialize DB when called)
 const addAdminRoutes = require('./admin-simple');
+const addAuthRoutes = require('./auth-routes');
 const getPool = () => pool;
 addAdminRoutes(app, getPool, initializeDatabase);
+addAuthRoutes(app, getPool, initializeDatabase);
 
 startServer();
