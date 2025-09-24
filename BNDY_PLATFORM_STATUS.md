@@ -232,21 +232,81 @@ Admin Tasks → bndy-centrestage → bndy-api → Aurora
 
 **Current Status**:
 - ✅ **Build Successfully Deployed** - bndy-backstage running on Amplify at backstage.bndy.co.uk
-- 🔄 **Authentication Implementation Progress**:
-  - **Google OAuth**: ✅ **MAJOR BREAKTHROUGH** - Complete OAuth token exchange flow implemented
-    - ✅ Fixed Cognito callback URLs from `/dashboard` to `/auth/callback`
-    - ✅ Implemented popup-based OAuth with postMessage communication
-    - ✅ Added complete authorization code to JWT token exchange
-    - ✅ Proper token storage in localStorage for Amplify session persistence
-    - ✅ Fixed authentication hook to provide `isAuthenticated` and `session` properties
-    - ✅ Fixed BandGate API calls to use correct App Runner backend URL
-    - ✅ Comprehensive debugging added throughout authentication flow
-  - **SMS/Phone Auth**: Blocked by SNS Sandbox + missing AWS End User Messaging origination identity
-  - **Environment Variables**: Correctly configured (eu-west-2_LqtkKHs1P, 5v481th8k6v9lqifnp5oppak89)
-- **Testing Phase**: 🧪 **READY FOR TESTING** - Complete authentication flow deployed, awaiting validation
+- ✅ **PRODUCTION-GRADE AUTHENTICATION COMPLETED** - Server-side OAuth implementation deployed
+  - **Server-Side OAuth**: ✅ **COMPLETE REWRITE** - Production-grade authentication system
+    - ✅ **Backend Implementation** (bndy-api):
+      - `/auth/google` - Secure OAuth initiation with CSRF state protection
+      - `/auth/callback` - Complete token exchange with Cognito + secure session creation
+      - `/api/me` - User profile endpoint with database integration and band data
+      - `/auth/logout` - Secure session termination and cookie cleanup
+      - Secure httpOnly cookies with proper domain settings (`.bndy.co.uk`)
+      - JWT session management with 7-day expiry and configurable secrets
+      - PostgreSQL integration for user/band authorization data
+    - ✅ **Frontend Implementation** (bndy-backstage):
+      - `useServerAuth` hook replacing client-side Cognito integration
+      - Direct redirect OAuth flow (no popups, no COOP issues)
+      - Automatic cookie-based authentication with `credentials: 'include'`
+      - Updated BandGate to work with server-provided user/band data
+    - ✅ **Security Features**:
+      - No client-side token storage (httpOnly cookies only)
+      - CSRF protection with OAuth state validation
+      - Cross-Origin-Opener-Policy issues eliminated (no popup communication)
+      - Production domain security with SameSite/Secure cookie attributes
+      - Database-backed user authorization instead of localStorage tokens
+  - **Authentication Flow**:
+    1. User clicks Google login → Redirects to `bndy-api/auth/google`
+    2. Backend handles OAuth with Cognito → Exchanges tokens + creates secure session
+    3. User automatically logged in → Redirects to `/dashboard` with httpOnly cookie
+    4. All API calls authenticated via secure session cookies
+  - **Dependencies Added**: jsonwebtoken, axios, cookie-parser
+  - **SMS/Phone Auth**: Deferred - SMS authentication can be added later to auth-routes.js
+  - **Environment Variables**: Production-ready with JWT_SECRET and secure cookie domains
+- **Deployment Status**: ✅ **BOTH DEPLOYMENTS COMPLETE** - Backend + Frontend deployed with server-side OAuth
+
+---
+
+## 🔐 **AUTHENTICATION ARCHITECTURE SUMMARY**
+
+### **Previous Implementation Issues**:
+- ❌ Client-side Cognito tokens stored in localStorage (XSS vulnerability)
+- ❌ Cross-Origin-Opener-Policy blocking popup communication
+- ❌ Complex postMessage handling between popup and parent windows
+- ❌ Manual JWT token exchange and validation on frontend
+- ❌ Authentication state management complexity
+
+### **New Production Architecture**:
+- ✅ **Server-side OAuth flow** - Backend handles all Cognito integration
+- ✅ **Secure httpOnly cookies** - No client-side token exposure
+- ✅ **Direct redirect flow** - No popup complexity or COOP issues
+- ✅ **JWT session management** - Signed tokens with configurable expiry
+- ✅ **Database integration** - User/band data from PostgreSQL
+- ✅ **CSRF protection** - State validation for OAuth security
+- ✅ **Production domain security** - Proper cookie attributes and domain settings
+
+### **Files Modified**:
+
+**Backend (bndy-api)**:
+- `src/auth-routes.js` - NEW: Complete OAuth implementation
+- `src/index.js` - Updated: CORS, cookie-parser, auth routes registration
+- `package.json` - Added: jsonwebtoken, axios, cookie-parser dependencies
+
+**Frontend (bndy-backstage)**:
+- `src/hooks/useServerAuth.tsx` - NEW: Server-side authentication hook
+- `src/App.tsx` - Updated: ServerAuthProvider instead of CognitoAuthProvider
+- `src/components/band-gate.tsx` - Updated: Server auth integration
+- `src/pages/auth/login.tsx` - Updated: Direct redirect to backend OAuth
+- Removed all client-side Cognito dependencies and localStorage token handling
+
+### **Testing Instructions**:
+1. Navigate to `https://backstage.bndy.co.uk/login`
+2. Click "Continue with Google"
+3. Complete Google OAuth flow
+4. Should redirect to `/dashboard` with secure session
+5. API calls to `/api/me` should work automatically via cookies
+6. No console errors related to COOP, postMessage, or token exchange
 
 ---
 
 *This document represents current state as of September 24, 2025*
-*Last updated: After Supabase cleanup and fresh build push*
+*Last updated: After production-grade server-side OAuth implementation*
 *Single source of truth for BNDY platform status*
