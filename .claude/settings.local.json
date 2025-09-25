@@ -21,7 +21,8 @@
       "Bash(npm install)",
       "Bash(for file in songs.tsx onboarding.tsx calendar.tsx admin.tsx profile.tsx dashboard.tsx)",
       "Bash(do sed -i \"s/import { useCognitoAuth } from \"\"@\\/hooks\\/useCognitoAuth\"\";/import { useServerAuth } from \"\"@\\/hooks\\/useServerAuth\"\";/g; s/useCognitoAuth/useServerAuth/g\" \"$file\")",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

@@ -141,13 +141,14 @@ function addAuthRoutes(app, getPool, initializeDatabase) {
         expiresIn: '7d'
       });
 
-      // Set secure httpOnly cookie - simplified now that we're on same domain
+      // Set secure httpOnly cookie with explicit domain for Amplify proxy
       const cookieOptions = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax', // Can use 'lax' now since we're on same domain
+        sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-        path: '/' // No domain needed - will be set for backstage.bndy.co.uk
+        path: '/',
+        domain: process.env.NODE_ENV === 'production' ? '.bndy.co.uk' : undefined // Allow cookie for all bndy.co.uk subdomains
       };
 
       console.log('🔐 AUTH CALLBACK: Setting cookie with options:', {
