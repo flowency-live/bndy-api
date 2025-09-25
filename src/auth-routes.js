@@ -12,7 +12,7 @@ const COGNITO_DOMAIN = 'https://eu-west-2lqtkkhs1p.auth.eu-west-2.amazoncognito.
 const CLIENT_ID = process.env.COGNITO_USER_POOL_CLIENT_ID || '5v481th8k6v9lqifnp5oppak89';
 const CLIENT_SECRET = process.env.COGNITO_USER_POOL_CLIENT_SECRET;
 const REDIRECT_URI = process.env.NODE_ENV === 'production'
-  ? 'https://4kxjn4gjqj.eu-west-2.awsapprunner.com/auth/callback'
+  ? 'https://api.bndy.co.uk/auth/callback'
   : 'http://localhost:3001/auth/callback';
 
 const FRONTEND_URL = process.env.NODE_ENV === 'production'
