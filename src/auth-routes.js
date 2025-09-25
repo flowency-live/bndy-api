@@ -145,7 +145,7 @@ function addAuthRoutes(app, getPool, initializeDatabase) {
       const cookieOptions = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Change to 'none' for cross-origin
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
         domain: process.env.NODE_ENV === 'production' ? '.bndy.co.uk' : undefined
       };
@@ -160,7 +160,25 @@ function addAuthRoutes(app, getPool, initializeDatabase) {
       res.cookie('bndy_session', sessionToken, cookieOptions);
 
       console.log('🔐 AUTH CALLBACK: Session created, redirecting to dashboard');
-      res.redirect(`${FRONTEND_URL}/dashboard`);
+
+      // Use HTML redirect instead of HTTP redirect to ensure cookie is set
+      res.send(`
+        <html>
+          <head>
+            <title>Redirecting...</title>
+            <script>
+              // Give the browser time to set the cookie
+              setTimeout(function() {
+                window.location.href = '${FRONTEND_URL}/dashboard';
+              }, 100);
+            </script>
+          </head>
+          <body>
+            <p>Authentication successful! Redirecting to dashboard...</p>
+            <p>If you are not redirected, <a href="${FRONTEND_URL}/dashboard">click here</a>.</p>
+          </body>
+        </html>
+      `);
 
     } catch (error) {
       console.error('🔐 AUTH CALLBACK: Token exchange failed:', error.message);
