@@ -142,13 +142,22 @@ function addAuthRoutes(app, getPool, initializeDatabase) {
       });
 
       // Set secure httpOnly cookie
-      res.cookie('bndy_session', sessionToken, {
+      const cookieOptions = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
         domain: process.env.NODE_ENV === 'production' ? '.bndy.co.uk' : undefined
+      };
+
+      console.log('🔐 AUTH CALLBACK: Setting cookie with options:', {
+        domain: cookieOptions.domain,
+        secure: cookieOptions.secure,
+        sameSite: cookieOptions.sameSite,
+        httpOnly: cookieOptions.httpOnly
       });
+
+      res.cookie('bndy_session', sessionToken, cookieOptions);
 
       console.log('🔐 AUTH CALLBACK: Session created, redirecting to dashboard');
       res.redirect(`${FRONTEND_URL}/dashboard`);
@@ -162,6 +171,14 @@ function addAuthRoutes(app, getPool, initializeDatabase) {
   // Authentication middleware
   const requireAuth = (req, res, next) => {
     const sessionToken = req.cookies?.bndy_session;
+
+    console.log('🔐 AUTH: Checking authentication', {
+      hasCookies: !!req.cookies,
+      cookieNames: req.cookies ? Object.keys(req.cookies) : [],
+      hasSessionToken: !!sessionToken,
+      origin: req.headers.origin,
+      referer: req.headers.referer
+    });
 
     if (!sessionToken) {
       console.log('🔐 AUTH: No session token found');
