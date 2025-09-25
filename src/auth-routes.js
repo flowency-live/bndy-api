@@ -12,7 +12,7 @@ const COGNITO_DOMAIN = 'https://eu-west-2lqtkkhs1p.auth.eu-west-2.amazoncognito.
 const CLIENT_ID = process.env.COGNITO_USER_POOL_CLIENT_ID || '5v481th8k6v9lqifnp5oppak89';
 const CLIENT_SECRET = process.env.COGNITO_USER_POOL_CLIENT_SECRET;
 const REDIRECT_URI = process.env.NODE_ENV === 'production'
-  ? 'https://api.bndy.co.uk/auth/callback'
+  ? 'https://backstage.bndy.co.uk/auth/callback'
   : 'http://localhost:3001/auth/callback';
 
 const FRONTEND_URL = process.env.NODE_ENV === 'production'
@@ -141,13 +141,13 @@ function addAuthRoutes(app, getPool, initializeDatabase) {
         expiresIn: '7d'
       });
 
-      // Set secure httpOnly cookie
+      // Set secure httpOnly cookie - simplified now that we're on same domain
       const cookieOptions = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Change to 'none' for cross-origin
+        sameSite: 'lax', // Can use 'lax' now since we're on same domain
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-        domain: process.env.NODE_ENV === 'production' ? '.bndy.co.uk' : undefined
+        path: '/' // No domain needed - will be set for backstage.bndy.co.uk
       };
 
       console.log('🔐 AUTH CALLBACK: Setting cookie with options:', {
@@ -161,24 +161,8 @@ function addAuthRoutes(app, getPool, initializeDatabase) {
 
       console.log('🔐 AUTH CALLBACK: Session created, redirecting to dashboard');
 
-      // Use HTML redirect instead of HTTP redirect to ensure cookie is set
-      res.send(`
-        <html>
-          <head>
-            <title>Redirecting...</title>
-            <script>
-              // Give the browser time to set the cookie
-              setTimeout(function() {
-                window.location.href = '${FRONTEND_URL}/dashboard';
-              }, 100);
-            </script>
-          </head>
-          <body>
-            <p>Authentication successful! Redirecting to dashboard...</p>
-            <p>If you are not redirected, <a href="${FRONTEND_URL}/dashboard">click here</a>.</p>
-          </body>
-        </html>
-      `);
+      // Simple redirect - works fine now that we're on same domain
+      res.redirect(`${FRONTEND_URL}/dashboard`);
 
     } catch (error) {
       console.error('🔐 AUTH CALLBACK: Token exchange failed:', error.message);

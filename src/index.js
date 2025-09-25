@@ -3,7 +3,6 @@
 
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
 const AWS = require('aws-sdk');
@@ -17,12 +16,7 @@ const secretsManager = new AWS.SecretsManager();
 
 let pool;
 
-app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://backstage.bndy.co.uk', 'https://bndy.live', 'https://bndy.co.uk']
-    : ['http://localhost:5173', 'http://localhost:3000'],
-  credentials: true
-}));
+// No CORS needed - Amplify proxies requests from same domain
 app.use(express.json());
 app.use(cookieParser());
 
