@@ -1,0 +1,112 @@
+    started_at = now_iso()
+    session = build_session()
+    artists, index_results = enumerate_artists(session)
+    if not artists:
+        raise RuntimeError("No artists discovered")
+
+    enriched: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for index, artist in enumerate(artists, 1):
+        try:
+            record = parse_profile(session, artist)
+            enriched.append(record)
+            print(f"[{index}/{len(artists)}] {artist.name}: profile ok", flush=True)
+        except Exception as exc:
+            failure = {**asdict(artist), "profile_fetch_status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+            failures.append(failure)
+            enriched.append({
+                **asdict(artist), "genres_raw": artist.index_genre,
+                "genres": split_genres(artist.index_genre), "band_formats": artist.act_type,
+                "originals_covers": None, "minimum_fee": None, "based_in": artist.based_area,
+                "profile_claim_status": None, "profile_last_updated": None,
+                "official_website_candidates": [], "official_website_url": None,
+                "facebook_profile_candidates": [], "facebook_url": None,
+                "facebook_match_method": None, "facebook_match_confidence": None,
+                "facebook_evidence_url": None, "profile_fetch_status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            print(f"ERROR [{index}/{len(artists)}] {artist.slug}: {exc}", file=sys.stderr, flush=True)
+        time.sleep(DELAY)
+
+    # Only inspect a website when exactly one non-social external website is linked
+    # from the exact Lemonrock artist profile and no Facebook page was already found.
+    jobs: dict[concurrent.futures.Future, tuple[int, str]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=SITE_WORKERS) as executor:
+        for index, record in enumerate(enriched):
+            website = record.get("official_website_url")
+            if not record.get("facebook_url") and website:
+                jobs[executor.submit(inspect_official_site, website)] = (index, website)
+        for completed, future in enumerate(concurrent.futures.as_completed(jobs), 1):
+            index, website = jobs[future]
+            result = future.result()
+            enriched[index]["official_website_inspection"] = result
+            facebook_url = result.get("facebook_url")
+            if facebook_url:
+                enriched[index]["facebook_url"] = facebook_url
+                enriched[index]["facebook_match_method"] = "official_website_linked_from_lemonrock"
+                enriched[index]["facebook_match_confidence"] = "verified"
+                enriched[index]["facebook_evidence_url"] = result.get("final_url") or website
+            if completed % 50 == 0:
+                print(f"official websites checked: {completed}/{len(jobs)}", flush=True)
+
+    completed_at = now_iso()
+    for record in enriched:
+        record["enriched_at"] = completed_at
+        record["facebook_match_policy"] = (
+            "Accepted only from the exact Lemonrock artist profile or from a single official website "
+            "linked by that profile; ambiguous or name-only search matches are excluded."
+        )
+
+    enriched.sort(key=lambda x: (x["name"].casefold(), x["slug"]))
+    direct_count = sum(r.get("facebook_match_method") == "lemonrock_profile" for r in enriched)
+    website_count = sum(r.get("facebook_match_method") == "official_website_linked_from_lemonrock" for r in enriched)
+    genre_count = sum(bool(r.get("genres_raw")) for r in enriched)
+    ambiguous_profile_fb = sum(r.get("facebook_profile_candidates") and not r.get("facebook_url") for r in enriched)
+    report = {
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "source": "Lemonrock Gig Guide and exact official websites linked from Lemonrock artist profiles",
+        "artist_index_count": len(artists),
+        "artist_profile_success_count": sum(r.get("profile_fetch_status") == "ok" for r in enriched),
+        "artist_profile_failure_count": len(failures),
+        "artists_with_profile_genre_count": genre_count,
+        "artists_with_verified_facebook_count": direct_count + website_count,
+        "facebook_direct_lemonrock_profile_count": direct_count,
+        "facebook_via_linked_official_website_count": website_count,
+        "ambiguous_multiple_facebook_candidate_count": ambiguous_profile_fb,
+        "official_website_jobs_count": len(jobs),
+        "index_results": index_results,
+        "complete": not failures and all(x.get("status") == "ok" for x in index_results),
+        "matching_policy": (
+            "No Facebook URL is accepted from a name-only web search. URLs must be directly attached "
+            "to the exact Lemonrock profile or to its uniquely linked official website."
+        ),
+    }
+    write_json(OUT / "artist_profile_enrichment.json", enriched)
+    write_jsonl(OUT / "artist_profile_enrichment.jsonl", enriched)
+    write_json(OUT / "artist_enrichment_report.json", report)
+    write_json(OUT / "artist_profile_failures.json", failures)
+    (OUT / "README.md").write_text(
+        "# Lemonrock artist profile enrichment\n\n"
+        f"Generated: {completed_at}\n\n"
+        f"- Indexed artist profiles: {len(artists):,}\n"
+        f"- Profiles fetched: {report['artist_profile_success_count']:,}\n"
+        f"- Profile genres: {genre_count:,}\n"
+        f"- Verified Facebook URLs: {direct_count + website_count:,}\n"
+        f"- Direct from Lemonrock profile: {direct_count:,}\n"
+        f"- Via an official website linked from Lemonrock: {website_count:,}\n"
+        f"- Profile fetch failures: {len(failures):,}\n\n"
+        "Facebook policy: no name-only or fuzzy search matches are included.\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(report, indent=2), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception:
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / "fatal_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        raise
