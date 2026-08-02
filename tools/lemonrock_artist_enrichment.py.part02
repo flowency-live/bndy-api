@@ -1,0 +1,153 @@
+        if value not in seen:
+            seen.add(value)
+            output.append(value)
+    return output
+
+
+def field_value(text: str, key: str) -> str | None:
+    match = FIELD_PATTERNS[key].search(text)
+    return clean_space(match.group(1)) if match else None
+
+
+def parse_last_updated(text: str) -> str | None:
+    match = re.search(r"Last updated\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})", text, re.I)
+    return clean_space(match.group(1)) if match else None
+
+
+def profile_claim_status(text: str) -> str | None:
+    lowered = text.casefold()
+    if "page has not been claimed" in lowered:
+        return "unclaimed"
+    if "page is jointly maintained" in lowered:
+        return "jointly_maintained"
+    if "page maintained" in lowered:
+        return "maintained"
+    return None
+
+
+def split_genres(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    output: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        value = clean_space(part)
+        if value and value.casefold() not in seen:
+            seen.add(value.casefold())
+            output.append(value)
+    return output
+
+
+def choose_direct_facebook(candidates: list[str]) -> tuple[str | None, str | None]:
+    if len(candidates) == 1:
+        return candidates[0], "lemonrock_profile"
+    # Multiple page/profile candidates are ambiguous, even though they occur on the profile.
+    return None, "ambiguous_multiple_profile_facebook_urls" if candidates else None
+
+
+def parse_profile(session: requests.Session, artist: ArtistRef) -> dict[str, Any]:
+    started = time.time()
+    response = get(session, artist.source_url)
+    lower = response.text.casefold()
+    if "request is being verified" in lower or "one moment, please" in lower:
+        raise RuntimeError("Bot verification page returned")
+    soup = BeautifulSoup(response.text, "html.parser")
+    text = clean_space(soup.get_text(" ", strip=True)) or ""
+    candidates = collect_facebook_candidates(soup, response.text + " " + text)
+    direct_fb, direct_status = choose_direct_facebook(candidates)
+    websites = web_field_links(soup, text, response.url)
+    return {
+        **asdict(artist),
+        "genres_raw": field_value(text, "genres_raw") or artist.index_genre,
+        "genres": split_genres(field_value(text, "genres_raw") or artist.index_genre),
+        "band_formats": field_value(text, "band_formats") or artist.act_type,
+        "originals_covers": field_value(text, "originals_covers"),
+        "minimum_fee": field_value(text, "minimum_fee"),
+        "based_in": field_value(text, "based_in") or artist.based_area,
+        "profile_claim_status": profile_claim_status(text),
+        "profile_last_updated": parse_last_updated(text),
+        "official_website_candidates": websites,
+        "official_website_url": websites[0] if len(websites) == 1 else None,
+        "facebook_profile_candidates": candidates,
+        "facebook_url": direct_fb,
+        "facebook_match_method": direct_status if direct_fb else None,
+        "facebook_match_confidence": "verified" if direct_fb else None,
+        "facebook_evidence_url": artist.source_url if direct_fb else None,
+        "profile_fetch_status": "ok",
+        "profile_http_status": response.status_code,
+        "profile_fetch_seconds": round(time.time() - started, 3),
+    }
+
+
+def likely_internal_pages(soup: BeautifulSoup, final_url: str, limit: int = 2) -> list[str]:
+    base = urlparse(final_url)
+    found: list[str] = []
+    seen: set[str] = set()
+    for anchor in soup.find_all("a", href=True):
+        href = urljoin(final_url, anchor.get("href") or "")
+        parsed = urlparse(href)
+        label = anchor.get_text(" ", strip=True)
+        if parsed.netloc.casefold() != base.netloc.casefold():
+            continue
+        if not LIKELY_INTERNAL_RE.search(label + " " + parsed.path):
+            continue
+        clean = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+        if clean not in seen and clean != final_url:
+            seen.add(clean)
+            found.append(clean)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def inspect_official_site(url: str) -> dict[str, Any]:
+    session = build_session()
+    started = time.time()
+    try:
+        response = get(session, url, timeout=20)
+        soup = BeautifulSoup(response.text, "html.parser")
+        candidates = collect_facebook_candidates(soup, response.text)
+        pages_checked = [response.url]
+        if not candidates:
+            for child in likely_internal_pages(soup, response.url):
+                try:
+                    child_response = get(session, child, timeout=15)
+                    pages_checked.append(child_response.url)
+                    child_soup = BeautifulSoup(child_response.text, "html.parser")
+                    candidates.extend(collect_facebook_candidates(child_soup, child_response.text))
+                except Exception:
+                    continue
+        candidates = list(dict.fromkeys(candidates))
+        facebook_url = candidates[0] if len(candidates) == 1 else None
+        return {
+            "requested_url": url,
+            "final_url": response.url,
+            "status": "ok",
+            "facebook_candidates": candidates,
+            "facebook_url": facebook_url,
+            "pages_checked": pages_checked,
+            "elapsed_seconds": round(time.time() - started, 3),
+        }
+    except Exception as exc:
+        return {
+            "requested_url": url,
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "elapsed_seconds": round(time.time() - started, 3),
+        }
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def main() -> int:
+    OUT.mkdir(parents=True, exist_ok=True)
