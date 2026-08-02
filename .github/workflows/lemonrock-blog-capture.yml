@@ -1,6 +1,11 @@
 name: Lemonrock Blog Capture
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/lemonrock_blog_capture.py
+      - .github/workflows/lemonrock-blog-capture.yml
   push:
     branches:
       - chore/lemonrock-blog-analysis-20260802
