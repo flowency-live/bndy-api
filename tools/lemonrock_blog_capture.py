@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -13,16 +14,16 @@ from typing import Any
 from urllib.parse import urljoin
 
 import requests
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Tag
 
 BASE = "https://www.lemonrock.com"
 BLOG_URL = f"{BASE}/editor?page=blog"
 OUT = Path(os.getenv("OUTPUT_DIR", "lemonrock_editor_blog_capture"))
 DELAY = float(os.getenv("LEMONROCK_DELAY", "0.50"))
 TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
-MAX_PAGES = int(os.getenv("MAX_PAGES", "80"))
-DATE_RE = re.compile(r"^(?:New\s+)?(\d{1,2}\s+[A-Z][a-z]{2}\s+\d{4})(.*)$")
-PAGE_COUNT_RE = re.compile(r"of\s+(\d+)", re.I)
+MAX_PAGES = int(os.getenv("MAX_PAGES", "100"))
+BLOG_COUNT_RE = re.compile(r"Blog\s*\((\d+)\)", re.I)
+BLOG_ID_RE = re.compile(r"^bl(\d+)$")
 
 
 @dataclass
@@ -34,7 +35,7 @@ class PageResult:
     http_status: int | None
     bytes: int
     sha256: str | None
-    candidate_dates: int
+    parsed_posts: int
     error: str | None = None
 
 
@@ -43,25 +44,26 @@ def now_iso() -> str:
 
 
 def build_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": "bndy-lemonrock-blog-research/0.1 (founder-authorised POC; contact: bndy)",
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "bndy-lemonrock-blog-research/0.2 (founder-authorised POC; contact: bndy)",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-GB,en;q=0.9",
         "Cache-Control": "no-cache",
     })
-    return s
+    return session
 
 
 def page_url(start: int) -> str:
     if start == 0:
         return BLOG_URL
-    return f"{BASE}/editor?_start={start}&page=blog"
+    # Lemonrock's routing requires page=blog to precede _start.
+    return f"{BASE}/editor?page=blog&_start={start}"
 
 
 def is_verification_page(text: str) -> bool:
     lower = text.casefold()
-    return any(x in lower for x in (
+    return any(marker in lower for marker in (
         "bot verification",
         "verify you are human",
         "checking your browser",
@@ -71,152 +73,243 @@ def is_verification_page(text: str) -> bool:
 
 
 def fetch(session: requests.Session, url: str) -> requests.Response:
-    last: Exception | None = None
+    last_error: Exception | None = None
     for attempt in range(4):
         try:
-            r = session.get(url, timeout=TIMEOUT)
-            if r.status_code in {429, 500, 502, 503, 504}:
-                wait = min(30, 2 ** attempt * 2)
-                time.sleep(wait)
+            response = session.get(url, timeout=TIMEOUT)
+            if response.status_code in {429, 500, 502, 503, 504}:
+                time.sleep(min(30, (2 ** attempt) * 2))
                 continue
-            r.raise_for_status()
-            if is_verification_page(r.text):
+            response.raise_for_status()
+            if is_verification_page(response.text):
                 raise RuntimeError("Bot verification page returned")
-            return r
+            return response
         except Exception as exc:
-            last = exc
-            if attempt == 3:
-                break
-            time.sleep(min(30, 2 ** attempt * 2))
-    raise RuntimeError(f"Failed to fetch {url}: {last}")
+            last_error = exc
+            if attempt < 3:
+                time.sleep(min(30, (2 ** attempt) * 2))
+    raise RuntimeError(f"Failed to fetch {url}: {last_error}")
 
 
-def visible_text(tag: Tag) -> str:
-    return " ".join(tag.get_text(" ", strip=True).split())
-
-
-def inspect_candidates(html: str) -> dict[str, Any]:
-    soup = BeautifulSoup(html, "html.parser")
-    date_nodes: list[dict[str, Any]] = []
-    for string in soup.find_all(string=True):
-        if not isinstance(string, NavigableString):
+def normalise_lines(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in text.replace("\r", "\n").split("\n"):
+        line = " ".join(raw_line.split())
+        if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
             continue
-        text = " ".join(str(string).split())
-        m = DATE_RE.match(text)
-        if not m:
+        if line == "___":
+            lines.append("---")
+        else:
+            lines.append(line)
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def extract_body(section: Tag) -> str:
+    fragment = BeautifulSoup(str(section), "html.parser")
+    root = fragment.select_one("section") or fragment
+
+    for selector in (
+        ".sechead", ".imgfit", ".dateh", ".mainh", ".lradd-cont", ".c",
+        "script", "style", "noscript",
+    ):
+        for node in root.select(selector):
+            node.decompose()
+
+    for separator in root.select("div.sepv"):
+        separator.replace_with("\n")
+    for br in root.find_all("br"):
+        br.replace_with("\n")
+
+    return normalise_lines(root.get_text("\n", strip=False))
+
+
+def extract_links(section: Tag, source_url: str) -> list[dict[str, str]]:
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for anchor in section.find_all("a", href=True):
+        href = anchor.get("href", "").strip()
+        if not href or href.startswith("javascript:") or "blogid=" in href:
             continue
-        parent = string.parent
-        ancestry: list[dict[str, Any]] = []
-        current: Tag | None = parent if isinstance(parent, Tag) else None
-        for _ in range(6):
-            if current is None:
-                break
-            ancestry.append({
-                "tag": current.name,
-                "id": current.get("id"),
-                "class": current.get("class", []),
-                "text_preview": visible_text(current)[:500],
-            })
-            current = current.parent if isinstance(current.parent, Tag) else None
-        date_nodes.append({
-            "raw": text,
-            "date": m.group(1),
-            "tail": m.group(2).strip(),
-            "ancestry": ancestry,
+        absolute = urljoin(BASE + "/", href)
+        if absolute == source_url or absolute in seen:
+            continue
+        seen.add(absolute)
+        links.append({
+            "url": absolute,
+            "label": " ".join(anchor.get_text(" ", strip=True).split()),
         })
-    return {
-        "candidate_date_count": len(date_nodes),
-        "date_nodes": date_nodes,
-        "page_text_preview": visible_text(soup)[:3000],
-    }
+    return links
+
+
+def parse_page(html: str, page_number: int, start: int, source_page_url: str) -> list[dict[str, Any]]:
+    soup = BeautifulSoup(html, "html.parser")
+    posts: list[dict[str, Any]] = []
+
+    for position, article in enumerate(soup.select("article.r"), 1):
+        section = article.select_one("section.secsepheading") or article
+        title_node = section.select_one(".sechead") or section.select_one(".mainh")
+        date_node = section.select_one(".dateh")
+        id_node = section.select_one(".mainh[id]")
+        if not title_node or not date_node or not id_node:
+            continue
+
+        id_match = BLOG_ID_RE.match(id_node.get("id", ""))
+        if not id_match:
+            continue
+        blog_id = int(id_match.group(1))
+        title = " ".join(title_node.get_text(" ", strip=True).split())
+        published_text = " ".join(date_node.get_text(" ", strip=True).split())
+        try:
+            published_date = datetime.strptime(published_text, "%d %b %Y").date().isoformat()
+        except ValueError:
+            published_date = None
+
+        source_url = f"{BASE}/editor?page=blog&blogid={blog_id}"
+        body = extract_body(section)
+        words = re.findall(r"\b[\w’'-]+\b", body, flags=re.UNICODE)
+
+        posts.append({
+            "blog_id": blog_id,
+            "title": title,
+            "published_text": published_text,
+            "published_date": published_date,
+            "source_url": source_url,
+            "source_page_url": source_page_url,
+            "archive_page_number": page_number,
+            "archive_start": start,
+            "position_on_page": position,
+            "body": body,
+            "word_count": len(words),
+            "links": extract_links(section, source_url),
+            "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        })
+
+    return posts
 
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     raw_dir = OUT / "raw_pages"
     raw_dir.mkdir(exist_ok=True)
-    started = now_iso()
+    started_at = now_iso()
     session = build_session()
-    page_results: list[PageResult] = []
-    diagnostics: list[dict[str, Any]] = []
 
-    first = fetch(session, page_url(0))
-    first_text = first.text
-    match = PAGE_COUNT_RE.search(visible_text(BeautifulSoup(first_text, "html.parser")))
-    total_pages = int(match.group(1)) if match else 62
+    first_response = fetch(session, page_url(0))
+    first_soup = BeautifulSoup(first_response.text, "html.parser")
+    first_text = " ".join(first_soup.get_text(" ", strip=True).split())
+    count_match = BLOG_COUNT_RE.search(first_text)
+    reported_blog_count = int(count_match.group(1)) if count_match else None
+    total_pages = math.ceil(reported_blog_count / 4) if reported_blog_count else 64
     total_pages = min(total_pages, MAX_PAGES)
-    print(f"Detected {total_pages} blog pages", flush=True)
+    print(f"Reported posts={reported_blog_count}; pages={total_pages}", flush=True)
 
-    for page_num in range(1, total_pages + 1):
-        start = (page_num - 1) * 4
+    page_results: list[PageResult] = []
+    all_posts: list[dict[str, Any]] = []
+
+    for page_number in range(1, total_pages + 1):
+        start = (page_number - 1) * 4
         url = page_url(start)
         try:
-            response = first if page_num == 1 else fetch(session, url)
-            data = response.content
-            sha = hashlib.sha256(data).hexdigest()
-            path = raw_dir / f"page_{page_num:03d}_start_{start:03d}.html"
-            path.write_bytes(data)
-            diag = inspect_candidates(response.text)
-            diagnostics.append({
-                "page_number": page_num,
-                "start": start,
-                "url": url,
-                **diag,
-            })
+            response = first_response if page_number == 1 else fetch(session, url)
+            raw = response.content
+            raw_path = raw_dir / f"page_{page_number:03d}_start_{start:03d}.html"
+            raw_path.write_bytes(raw)
+            parsed = parse_page(response.text, page_number, start, url)
+            all_posts.extend(parsed)
             page_results.append(PageResult(
-                page_number=page_num,
+                page_number=page_number,
                 start=start,
                 url=url,
                 status="ok",
                 http_status=response.status_code,
-                bytes=len(data),
-                sha256=sha,
-                candidate_dates=diag["candidate_date_count"],
+                bytes=len(raw),
+                sha256=hashlib.sha256(raw).hexdigest(),
+                parsed_posts=len(parsed),
             ))
-            print(f"[{page_num}/{total_pages}] {url} dates={diag['candidate_date_count']} bytes={len(data)}", flush=True)
+            print(f"[{page_number}/{total_pages}] posts={len(parsed)} {url}", flush=True)
         except Exception as exc:
             page_results.append(PageResult(
-                page_number=page_num,
+                page_number=page_number,
                 start=start,
                 url=url,
                 status="failed",
                 http_status=None,
                 bytes=0,
                 sha256=None,
-                candidate_dates=0,
+                parsed_posts=0,
                 error=f"{type(exc).__name__}: {exc}",
             ))
-            print(f"ERROR [{page_num}/{total_pages}] {url}: {exc}", file=sys.stderr, flush=True)
-        if page_num != total_pages:
+            print(f"ERROR [{page_number}/{total_pages}] {url}: {exc}", file=sys.stderr, flush=True)
+        if page_number != total_pages:
             time.sleep(DELAY)
 
-    completed = now_iso()
+    # Dedupe only by immutable Lemonrock blog ID, retaining the first archive occurrence.
+    posts_by_id: dict[int, dict[str, Any]] = {}
+    duplicate_ids: list[int] = []
+    for post in all_posts:
+        blog_id = post["blog_id"]
+        if blog_id in posts_by_id:
+            duplicate_ids.append(blog_id)
+            continue
+        posts_by_id[blog_id] = post
+
+    posts = sorted(
+        posts_by_id.values(),
+        key=lambda item: (item.get("published_date") or "", item["blog_id"]),
+        reverse=True,
+    )
+    completed_at = now_iso()
+    complete = (
+        all(page.status == "ok" for page in page_results)
+        and not duplicate_ids
+        and (reported_blog_count is None or len(posts) == reported_blog_count)
+    )
+
     report = {
-        "started_at": started,
-        "completed_at": completed,
+        "started_at": started_at,
+        "completed_at": completed_at,
         "source_url": BLOG_URL,
-        "reported_blog_count": 248,
+        "reported_blog_count": reported_blog_count,
         "detected_page_count": total_pages,
-        "successful_pages": sum(x.status == "ok" for x in page_results),
-        "failed_pages": sum(x.status != "ok" for x in page_results),
-        "candidate_date_nodes": sum(x.candidate_dates for x in page_results),
-        "complete": all(x.status == "ok" for x in page_results),
-        "pages": [asdict(x) for x in page_results],
+        "successful_pages": sum(page.status == "ok" for page in page_results),
+        "failed_pages": sum(page.status != "ok" for page in page_results),
+        "parsed_post_occurrences": len(all_posts),
+        "unique_posts": len(posts),
+        "duplicate_blog_ids": sorted(set(duplicate_ids)),
+        "oldest_post_date": min((post["published_date"] for post in posts if post["published_date"]), default=None),
+        "newest_post_date": max((post["published_date"] for post in posts if post["published_date"]), default=None),
+        "total_words": sum(post["word_count"] for post in posts),
+        "complete": complete,
+        "pages": [asdict(page) for page in page_results],
     }
-    (OUT / "capture_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    (OUT / "parser_diagnostics.json").write_text(json.dumps(diagnostics, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    (OUT / "posts_full_internal.json").write_text(
+        json.dumps(posts, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    with (OUT / "posts_full_internal.jsonl").open("w", encoding="utf-8") as handle:
+        for post in posts:
+            handle.write(json.dumps(post, ensure_ascii=False) + "\n")
+    (OUT / "capture_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     (OUT / "README.md").write_text(
-        "# Lemonrock Editor blog capture\n\n"
-        f"Captured: {completed}\n\n"
-        f"- Detected pages: {total_pages}\n"
-        f"- Successful pages: {report['successful_pages']}\n"
+        "# Lemonrock Editor blog research capture\n\n"
+        f"Captured: {completed_at}\n\n"
+        f"- Reported posts: {reported_blog_count}\n"
+        f"- Parsed unique posts: {len(posts)}\n"
+        f"- Archive pages: {total_pages}\n"
         f"- Failed pages: {report['failed_pages']}\n"
-        f"- Candidate dated entries: {report['candidate_date_nodes']}\n\n"
-        "Raw HTML is retained solely for analysis and is not intended for republication.\n",
+        f"- Date range: {report['oldest_post_date']} to {report['newest_post_date']}\n"
+        f"- Total words: {report['total_words']:,}\n\n"
+        "The full captured text is retained for analysis only and must not be republished verbatim without permission.\n",
         encoding="utf-8",
     )
     print(json.dumps(report, indent=2), flush=True)
-    return 0 if report["complete"] else 1
+    return 0 if complete else 1
 
 
 if __name__ == "__main__":
