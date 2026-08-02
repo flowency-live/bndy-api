@@ -1,0 +1,35 @@
+name: Lemonrock Blog Missing Page
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/lemonrock_blog_missing_page.py
+      - .github/workflows/lemonrock-blog-missing-page.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check requests
+      - name: Fetch missing archive page
+        run: python tools/lemonrock_blog_missing_page.py
+        env:
+          OUTPUT_DIR: lemonrock_editor_blog_missing
+      - name: Upload missing page
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemonrock-editor-blog-missing-page
+          path: lemonrock_editor_blog_missing/
+          retention-days: 3
+          if-no-files-found: error
