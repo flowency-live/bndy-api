@@ -41,7 +41,6 @@ def split_genres(raw: str | None) -> list[str]:
 def choose_direct_facebook(candidates: list[str]) -> tuple[str | None, str | None]:
     if len(candidates) == 1:
         return candidates[0], "lemonrock_profile"
-    # Multiple page/profile candidates are ambiguous, even though they occur on the profile.
     return None, "ambiguous_multiple_profile_facebook_urls" if candidates else None
 
 
@@ -80,45 +79,24 @@ def parse_profile(session: requests.Session, artist: ArtistRef) -> dict[str, Any
 
 
 def likely_internal_pages(soup: BeautifulSoup, final_url: str, limit: int = 2) -> list[str]:
-    base = urlparse(final_url)
-    found: list[str] = []
-    seen: set[str] = set()
-    for anchor in soup.find_all("a", href=True):
-        href = urljoin(final_url, anchor.get("href") or "")
-        parsed = urlparse(href)
-        label = anchor.get_text(" ", strip=True)
-        if parsed.netloc.casefold() != base.netloc.casefold():
-            continue
-        if not LIKELY_INTERNAL_RE.search(label + " " + parsed.path):
-            continue
-        clean = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
-        if clean not in seen and clean != final_url:
-            seen.add(clean)
-            found.append(clean)
-        if len(found) >= limit:
-            break
-    return found
+    return []
 
 
 def inspect_official_site(url: str) -> dict[str, Any]:
-    session = build_session()
+    """Bounded exact-site check: one homepage, no retry and no fuzzy search."""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-GB,en;q=0.9",
+    })
     started = time.time()
     try:
-        response = get(session, url, timeout=20)
+        response = session.get(url, timeout=(5, 8), allow_redirects=True)
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         visible_text = clean_space(soup.get_text(" ", strip=True)) or ""
         candidates = collect_facebook_candidates(soup, visible_text)
-        pages_checked = [response.url]
-        if not candidates:
-            for child in likely_internal_pages(soup, response.url):
-                try:
-                    child_response = get(session, child, timeout=15)
-                    pages_checked.append(child_response.url)
-                    child_soup = BeautifulSoup(child_response.text, "html.parser")
-                    child_text = clean_space(child_soup.get_text(" ", strip=True)) or ""
-                    candidates.extend(collect_facebook_candidates(child_soup, child_text))
-                except Exception:
-                    continue
         candidates = list(dict.fromkeys(candidates))
         facebook_url = candidates[0] if len(candidates) == 1 else None
         return {
@@ -127,7 +105,7 @@ def inspect_official_site(url: str) -> dict[str, Any]:
             "status": "ok",
             "facebook_candidates": candidates,
             "facebook_url": facebook_url,
-            "pages_checked": pages_checked,
+            "pages_checked": [response.url],
             "elapsed_seconds": round(time.time() - started, 3),
         }
     except Exception as exc:
