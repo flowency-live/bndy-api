@@ -53,7 +53,7 @@ def parse_profile(session: requests.Session, artist: ArtistRef) -> dict[str, Any
         raise RuntimeError("Bot verification page returned")
     soup = BeautifulSoup(response.text, "html.parser")
     text = clean_space(soup.get_text(" ", strip=True)) or ""
-    candidates = collect_facebook_candidates(soup, response.text + " " + text)
+    candidates = collect_facebook_candidates(soup, text)
     direct_fb, direct_status = choose_direct_facebook(candidates)
     websites = web_field_links(soup, text, response.url)
     return {
@@ -106,7 +106,8 @@ def inspect_official_site(url: str) -> dict[str, Any]:
     try:
         response = get(session, url, timeout=20)
         soup = BeautifulSoup(response.text, "html.parser")
-        candidates = collect_facebook_candidates(soup, response.text)
+        visible_text = clean_space(soup.get_text(" ", strip=True)) or ""
+        candidates = collect_facebook_candidates(soup, visible_text)
         pages_checked = [response.url]
         if not candidates:
             for child in likely_internal_pages(soup, response.url):
@@ -114,7 +115,8 @@ def inspect_official_site(url: str) -> dict[str, Any]:
                     child_response = get(session, child, timeout=15)
                     pages_checked.append(child_response.url)
                     child_soup = BeautifulSoup(child_response.text, "html.parser")
-                    candidates.extend(collect_facebook_candidates(child_soup, child_response.text))
+                    child_text = clean_space(child_soup.get_text(" ", strip=True)) or ""
+                    candidates.extend(collect_facebook_candidates(child_soup, child_text))
                 except Exception:
                     continue
         candidates = list(dict.fromkeys(candidates))
