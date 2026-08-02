@@ -1,0 +1,44 @@
+name: Lemonrock Full Export
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/lemonrock_full_export.py
+      - .github/workflows/lemonrock-full-export.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4
+
+      - name: Export Lemonrock catalogue
+        run: python tools/lemonrock_full_export.py
+        env:
+          OUTPUT_DIR: lemonrock_export
+          LEMONROCK_DELAY: "0.25"
+          LEMONROCK_YEARS: "5"
+          LEMONROCK_ACCESS_KEY: ${{ secrets.LEMONROCK_ACCESS_KEY }}
+
+      - name: Upload export files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemonrock-uk-full-export
+          path: lemonrock_export/
+          retention-days: 3
+          if-no-files-found: error
