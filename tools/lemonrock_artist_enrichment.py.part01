@@ -1,0 +1,136 @@
+    cuts = [m.start() for m in (act_match, count_match, based_match) if m]
+    genre = clean_space(metadata[:min(cuts)] if cuts else metadata)
+    return ArtistRef(
+        slug=path,
+        name=name,
+        index_genre=genre,
+        act_type=clean_space(act_match.group(1)) if act_match else None,
+        based_area=clean_space(based_match.group(1)) if based_match else None,
+        listed_current_gig_count=int(count_match.group(1)) if count_match else None,
+        metadata_text=metadata,
+        source_url=absolute,
+        index_letter=letter,
+    )
+
+
+def enumerate_artists(session: requests.Session) -> tuple[list[ArtistRef], list[dict[str, Any]]]:
+    found: dict[str, ArtistRef] = {}
+    results: list[dict[str, Any]] = []
+    for letter in LETTERS:
+        started = time.time()
+        try:
+            response = get(session, f"{BASE_URL}/allbands.php?_start={letter}&all=0&cc=gb")
+            lower = response.text.casefold()
+            if "request is being verified" in lower or "one moment, please" in lower:
+                raise RuntimeError("Bot verification page returned")
+            soup = BeautifulSoup(response.text, "html.parser")
+            before = len(found)
+            for anchor in soup.find_all("a", href=True):
+                artist = parse_artist_anchor(anchor, letter)
+                if artist:
+                    found.setdefault(artist.slug, artist)
+            results.append({
+                "letter": letter, "status": "ok", "added": len(found) - before,
+                "elapsed_seconds": round(time.time() - started, 3), "url": response.url,
+            })
+            print(f"artist index {letter}: +{len(found)-before} (total {len(found)})", flush=True)
+        except Exception as exc:
+            results.append({"letter": letter, "status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+            print(f"ERROR artist index {letter}: {exc}", file=sys.stderr, flush=True)
+        time.sleep(DELAY)
+    return sorted(found.values(), key=lambda x: (x.name.casefold(), x.slug)), results
+
+
+def unwrap_redirect(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.netloc.casefold() in {"l.facebook.com", "lm.facebook.com"}:
+        candidate = parse_qs(parsed.query).get("u", [None])[0]
+        if candidate:
+            return unquote(candidate)
+    return url
+
+
+def canonical_facebook_url(url: str) -> str | None:
+    value = unwrap_redirect(url.strip().strip(".,;:!?)]}\"'"))
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", value, re.I):
+        value = "https://" + value.lstrip("/")
+    parsed = urlparse(value)
+    host = parsed.netloc.casefold().split(":", 1)[0]
+    if host in {"fb.com", "www.fb.com", "fb.me", "www.fb.me"}:
+        host = "www.facebook.com"
+    if host not in {"facebook.com", "www.facebook.com", "m.facebook.com", "mbasic.facebook.com"}:
+        return None
+    path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/")
+    segments = [segment.casefold() for segment in path.split("/") if segment]
+    if not segments:
+        return None
+    if segments[0] in FACEBOOK_REJECT_SEGMENTS:
+        return None
+    if segments[0] == "profile.php":
+        ident = parse_qs(parsed.query).get("id", [None])[0]
+        if not ident:
+            return None
+        return f"https://www.facebook.com/profile.php?id={ident}"
+    if segments[0] == "people" and len(segments) >= 3:
+        path = "/" + "/".join(path.strip("/").split("/")[:3])
+    elif segments[0] == "pages" and len(segments) >= 3:
+        path = "/" + "/".join(path.strip("/").split("/")[:3])
+    else:
+        path = "/" + path.strip("/").split("/")[0]
+    return urlunparse(("https", "www.facebook.com", path, "", "", ""))
+
+
+def collect_facebook_candidates(soup: BeautifulSoup, raw_text: str) -> list[str]:
+    values: list[str] = []
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href") or ""
+        if "facebook" in href.casefold() or re.search(r"\bfb\.(?:com|me)/", href, re.I):
+            values.append(href)
+    for match in FACEBOOK_TEXT_RE.finditer(raw_text.replace("www,facebook", "www.facebook")):
+        values.append(match.group(0))
+    canonical: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        candidate = canonical_facebook_url(value)
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            canonical.append(candidate)
+    return canonical
+
+
+def web_field_links(soup: BeautifulSoup, text: str, page_url: str) -> list[str]:
+    """Extract only URLs represented by the profile's Band Details 'Web' field."""
+    values: list[str] = []
+    # DOM route: locate a text node whose field label is exactly Web, then inspect
+    # its containing row/block and the immediately following sibling.
+    for node in soup.find_all(string=lambda value: bool(value and value.strip().casefold() == "web")):
+        parent = node.parent
+        containers = [parent, getattr(parent, "parent", None), getattr(getattr(parent, "parent", None), "parent", None)]
+        for container in [c for c in containers if c is not None]:
+            for anchor in container.find_all("a", href=True):
+                values.append(urljoin(page_url, anchor.get("href") or ""))
+            sibling = container.find_next_sibling()
+            if sibling is not None:
+                for anchor in sibling.find_all("a", href=True):
+                    values.append(urljoin(page_url, anchor.get("href") or ""))
+            if values:
+                break
+        if values:
+            break
+    # Flattened-text fallback used by Lemonrock's simple field layout.
+    match = re.search(
+        r"\bWeb\s+(https?://\S+?)(?=\s+(?:Email|Send Enquiry|Info|Page Info)\b|$)",
+        text, re.I,
+    )
+    if match:
+        values.append(match.group(1))
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        value = value.strip().strip(".,;:!?)]}\"'")
+        parsed = urlparse(value)
+        host = parsed.netloc.casefold().split(":", 1)[0]
+        if parsed.scheme not in {"http", "https"} or not host:
+            continue
+        if host.endswith("lemonrock.com"):
+            continue
