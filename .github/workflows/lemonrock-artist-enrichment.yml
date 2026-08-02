@@ -1,0 +1,52 @@
+name: Lemonrock Artist Enrichment
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/lemonrock_artist_enrichment.py.part00
+      - tools/lemonrock_artist_enrichment.py.part01
+      - tools/lemonrock_artist_enrichment.py.part02
+      - tools/lemonrock_artist_enrichment.py.part03
+      - .github/workflows/lemonrock-artist-enrichment.yml
+
+permissions:
+  contents: read
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4
+
+      - name: Assemble enrichment script
+        run: cat tools/lemonrock_artist_enrichment.py.part0* > /tmp/lemonrock_artist_enrichment.py
+
+      - name: Validate enrichment script
+        run: python -m py_compile /tmp/lemonrock_artist_enrichment.py
+
+      - name: Enrich Lemonrock artists
+        run: python /tmp/lemonrock_artist_enrichment.py
+        env:
+          OUTPUT_DIR: lemonrock_artist_enrichment
+          LEMONROCK_DELAY: "0.20"
+          OFFICIAL_SITE_WORKERS: "8"
+
+      - name: Upload enrichment files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemonrock-artist-enrichment
+          path: lemonrock_artist_enrichment/
+          retention-days: 3
+          if-no-files-found: error
