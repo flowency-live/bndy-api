@@ -15,8 +15,8 @@ permissions:
 
 jobs:
   enrich:
-    runs-on: ubuntu-latest
-    timeout-minutes: 240
+    runs-on: macos-latest
+    timeout-minutes: 120
     steps:
       - name: Check out branch
         uses: actions/checkout@v4
@@ -39,7 +39,7 @@ jobs:
         run: python /tmp/lemonrock_artist_enrichment.py
         env:
           OUTPUT_DIR: lemonrock_artist_enrichment
-          LEMONROCK_DELAY: "0.20"
+          LEMONROCK_DELAY: "0.25"
           OFFICIAL_SITE_WORKERS: "8"
 
       - name: Upload enrichment files
