@@ -64,7 +64,9 @@ def canonical_facebook_url(url: str) -> str | None:
     segments = [segment.casefold() for segment in path.split("/") if segment]
     if not segments:
         return None
-    if segments[0] in FACEBOOK_REJECT_SEGMENTS:
+    if segments[0] in FACEBOOK_REJECT_SEGMENTS or segments[0].isdigit():
+        return None
+    if re.fullmatch(r"v\d+(?:\.\d+)?", segments[0]):
         return None
     if segments[0] == "profile.php":
         ident = parse_qs(parsed.query).get("id", [None])[0]
