@@ -64,6 +64,7 @@ FACEBOOK_REJECT_SEGMENTS = {
     "share", "sharer", "sharer.php", "share.php", "dialog", "plugins", "login",
     "groups", "events", "watch", "reel", "reels", "photo", "photos", "posts",
     "permalink.php", "story.php", "marketplace", "gaming", "help", "privacy",
+    "tr", "connect", "ajax", "rsrc.php", "business", "ads", "campaign", "2008",
 }
 LIKELY_INTERNAL_RE = re.compile(r"(?:contact|about|links|social|follow|connect)", re.I)
 
