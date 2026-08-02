@@ -61,7 +61,7 @@
     direct_count = sum(r.get("facebook_match_method") == "lemonrock_profile" for r in enriched)
     website_count = sum(r.get("facebook_match_method") == "official_website_linked_from_lemonrock" for r in enriched)
     genre_count = sum(bool(r.get("genres_raw")) for r in enriched)
-    ambiguous_profile_fb = sum(r.get("facebook_profile_candidates") and not r.get("facebook_url") for r in enriched)
+    ambiguous_profile_fb = sum(1 for r in enriched if r.get("facebook_profile_candidates") and not r.get("facebook_url"))
     report = {
         "started_at": started_at,
         "completed_at": completed_at,
